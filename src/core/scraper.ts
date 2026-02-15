@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page } from 'puppeteer';
 import { convertHtmlToMarkdown } from '../lib/html-to-md';
+import { getRandomUserAgent, defaultHeaders } from '../lib/user-agents';
 
 puppeteer.use(StealthPlugin());
 
@@ -33,14 +34,23 @@ export class ScraperEngine {
         }
     }
 
-    async scrape(url: string): Promise<ScrapeResult> {
+    async scrape(url: string, mode: 'scrape' | 'map' = 'scrape'): Promise<ScrapeResult> {
         if (!this.browser) await this.init();
+
 
         const page = await this.browser!.newPage();
         try {
-            // Random User Agent
-            const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+            // Advanced Anti-Bot: Rotate UA and set headers
+            const ua = getRandomUserAgent();
             await page.setUserAgent(ua);
+            await page.setExtraHTTPHeaders(defaultHeaders);
+
+            // Hide webdriver
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false,
+                });
+            });
 
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
@@ -52,6 +62,17 @@ export class ScraperEngine {
             // Extract links
             const links = await page.$$eval('a', (anchors) => anchors.map(a => a.href));
             const uniqueLinks = [...new Set(links)]; // Deduplicate
+
+            if (mode === 'map') {
+                return {
+                    url,
+                    markdown: '',
+                    title: await page.title(),
+                    html: '',
+                    links: uniqueLinks,
+                    metadata: {}
+                };
+            }
 
             // Convert to Markdown
             const extracted = convertHtmlToMarkdown(content, url);

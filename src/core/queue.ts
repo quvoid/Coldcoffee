@@ -70,6 +70,50 @@ export const initWorker = () => {
                 }
 
                 return result;
+            } else if (mode === 'map') {
+                // Map mode: Crawl but return links only, no markdown
+                const { crawlId, limit } = job.data;
+                const visitedKey = `map:visited:${crawlId}`;
+
+                // Check limit
+                const count = await redis.scard(visitedKey);
+                if (count >= limit) return { message: 'Limit reached' };
+
+                await redis.sadd(visitedKey, url);
+
+                // Scrape (Map mode)
+                const result = await scraper.scrape(url, 'map');
+
+                // For map, we want to discover *all* links on the domain
+                if (result.links) {
+                    const baseUrl = new URL(url);
+                    const childJobs = result.links
+                        .filter(link => {
+                            try {
+                                const linkUrl = new URL(link, url);
+                                return linkUrl.hostname === baseUrl.hostname;
+                            } catch { return false; }
+                        })
+                        .map(link => ({
+                            name: 'map-job',
+                            data: {
+                                url: link,
+                                mode: 'map',
+                                crawlId,
+                                limit
+                            },
+                            opts: { jobId: link } // Deduplication by ID
+                        }));
+
+                    for (const child of childJobs) {
+                        // Check if already visited/queued
+                        const isVisited = await redis.sismember(visitedKey, child.data.url);
+                        if (!isVisited) {
+                            await scrapeQueue.add(child.name, child.data, child.opts);
+                        }
+                    }
+                }
+                return { url, links: result.links };
             }
 
         } catch (error) {
